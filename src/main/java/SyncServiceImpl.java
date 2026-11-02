@@ -23,7 +23,27 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
         // 2. Bất đồng bộ gửi RMI sang Server Peer để đồng bộ
         notifyPeer(key, value);
     }
+    @Override
+    public synchronized void deleteData(String key) throws RemoteException {
+        dataStore.remove(key);
+        System.out.println("[LOCAL DELETE] Key: " + key);
 
+        // Gửi đồng bộ lệnh XÓA sang Peer
+        new Thread(() -> {
+            try {
+                SyncService peerService = (SyncService) Naming.lookup("rmi://" + peerIp + ":1099/SyncService");
+                peerService.syncDeleteFromPeer(key);
+            } catch (Exception e) {
+                System.err.println("Không thể đồng bộ xóa sang Peer: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    @Override
+    public synchronized void syncDeleteFromPeer(String key) throws RemoteException {
+        dataStore.remove(key);
+        System.out.println("[SYNC DELETE FROM PEER] Key: " + key);
+    }
     @Override
     public synchronized void syncFromPeer(String key, String value) throws RemoteException {
         // Nhận dữ liệu đồng bộ từ Server kia (không gửi ngược lại để tránh vòng lặp)

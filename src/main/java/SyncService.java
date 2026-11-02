@@ -12,4 +12,6 @@ public interface SyncService extends Remote {
 
     // Lấy toàn bộ dữ liệu hiện có
     Map<String, String> getAllData() throws RemoteException;
+    void deleteData(String key) throws RemoteException;
+    void syncDeleteFromPeer(String key) throws RemoteException;
 }
