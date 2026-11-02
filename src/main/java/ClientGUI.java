@@ -1,21 +1,31 @@
 import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.rmi.Naming;
-import java.util.Map;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class ClientGUI extends JFrame {
-    private JTextField txtServerIp, txtKey, txtValue;
-    private JButton btnConnect, btnAdd, btnUpdate, btnDelete;
-    private JTable table;
-    private DefaultTableModel tableModel;
+    private JTextField txtServerIp, txtUsername, txtMessage;
+    private JButton btnConnect, btnSend, btnReload;
+    private JPanel chatContainerPanel; // Khung chứa các bóng tin nhắn Zalo
+    private JScrollPane scrollPane;
     private JLabel lblStatus;
 
     private SyncService currentService;
+    private Timer autoRefreshTimer;
+
+    // Màu sắc chủ đạo chuẩn phong cách Zalo
+    private static final Color ZALO_BLUE = new Color(0, 104, 255);
+    private static final Color ZALO_BG = new Color(234, 238, 243);
+    private static final Color MY_BUBBLE_BG = new Color(0, 104, 255);
+    private static final Color PEER_BUBBLE_BG = Color.WHITE;
 
     public ClientGUI() {
-        setTitle("RMI Client - Quản lý & Đồng bộ dữ liệu");
-        setSize(720, 480);
+        setTitle("Zalo RMI Chat - Phòng Chat Phân Tán");
+        setSize(750, 560);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
@@ -23,171 +33,260 @@ public class ClientGUI extends JFrame {
     }
 
     private void initUI() {
-        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
-        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBackground(ZALO_BG);
 
-        // Top Panel: Kết nối Server
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
-        topPanel.add(new JLabel("IP Server:"));
-        txtServerIp = new JTextField("172.20.10.2", 12);
-        btnConnect = new JButton("🔌 Kết nối Server");
-        topPanel.add(txtServerIp);
-        topPanel.add(btnConnect);
+        // ==========================================
+        // 1. HEADER (Thanh trên cùng dạng Zalo)
+        // ==========================================
+        JPanel headerPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
+        headerPanel.setBackground(ZALO_BLUE);
 
-        // Center Panel: Nhập liệu & Bảng
-        JPanel centerPanel = new JPanel(new BorderLayout(5, 5));
+        JLabel lblTitle = new JLabel("💬 Zalo Chat RMI ");
+        lblTitle.setFont(new Font("SansSerif", Font.BOLD, 15));
+        lblTitle.setForeground(Color.WHITE);
+        headerPanel.add(lblTitle);
 
-        JPanel formPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 5));
-        formPanel.add(new JLabel("Key:"));
-        txtKey = new JTextField(8);
-        formPanel.add(txtKey);
+        JLabel lblIp = new JLabel("IP Server:");
+        lblIp.setForeground(Color.WHITE);
+        headerPanel.add(lblIp);
 
-        formPanel.add(new JLabel("Value:"));
-        txtValue = new JTextField(10);
-        formPanel.add(txtValue);
+        txtServerIp = new JTextField("172.20.10.2", 10);
+        headerPanel.add(txtServerIp);
 
-        // Khai báo 3 nút chức năng rõ ràng
-        btnAdd = new JButton("➕ Thêm dữ liệu");
-        btnUpdate = new JButton("🔄 Cập nhật (Reload)");
-        btnDelete = new JButton("❌ Xóa dữ liệu");
+        JLabel lblUser = new JLabel("Tên bạn:");
+        lblUser.setForeground(Color.WHITE);
+        headerPanel.add(lblUser);
 
-        btnAdd.setEnabled(false);
-        btnUpdate.setEnabled(false);
-        btnDelete.setEnabled(false);
+        txtUsername = new JTextField("User_" + (int)(Math.random() * 900 + 100), 7);
+        headerPanel.add(txtUsername);
 
-        formPanel.add(btnAdd);
-        formPanel.add(btnUpdate);
-        formPanel.add(btnDelete);
+        btnConnect = new JButton("🔌 Kết nối");
+        btnConnect.setBackground(Color.WHITE);
+        btnConnect.setForeground(ZALO_BLUE);
+        btnConnect.setFont(new Font("SansSerif", Font.BOLD, 12));
+        btnConnect.setFocusPainted(false);
+        headerPanel.add(btnConnect);
 
-        tableModel = new DefaultTableModel(new String[]{"Khóa (Key)", "Giá trị (Value)"}, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false; // Không cho sửa trực tiếp trên ô của bảng
-            }
-        };
-        table = new JTable(tableModel);
+        // ==========================================
+        // 2. KHUNG TRO CHUYỆN (Chat Container)
+        // ==========================================
+        chatContainerPanel = new JPanel();
+        chatContainerPanel.setLayout(new BoxLayout(chatContainerPanel, BoxLayout.Y_AXIS));
+        chatContainerPanel.setBackground(ZALO_BG);
 
-        // Click chọn dòng trên bảng -> Tự điền Key & Value xuống ô nhập
-        table.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting() && table.getSelectedRow() != -1) {
-                int row = table.getSelectedRow();
-                txtKey.setText(tableModel.getValueAt(row, 0).toString());
-                txtValue.setText(tableModel.getValueAt(row, 1).toString());
-            }
-        });
+        scrollPane = new JScrollPane(chatContainerPanel);
+        scrollPane.setBorder(null);
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
 
-        centerPanel.add(formPanel, BorderLayout.NORTH);
-        centerPanel.add(new JScrollPane(table), BorderLayout.CENTER);
+        // ==========================================
+        // 3. KHUNG NHẬP TIN NHẮN (Bottom Input Bar)
+        // ==========================================
+        JPanel southContainer = new JPanel(new BorderLayout(5, 5));
+        southContainer.setBackground(Color.WHITE);
+        southContainer.setBorder(BorderFactory.createEmptyBorder(8, 10, 8, 10));
 
-        // Bottom Panel: Thanh trạng thái (Status Bar)
-        lblStatus = new JLabel("Chưa kết nối đến Server.");
-        lblStatus.setBorder(BorderFactory.createEtchedBorder());
+        txtMessage = new JTextField();
+        txtMessage.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        txtMessage.setEnabled(false);
+        txtMessage.setMargin(new Insets(5, 8, 5, 8));
 
-        mainPanel.add(topPanel, BorderLayout.NORTH);
-        mainPanel.add(centerPanel, BorderLayout.CENTER);
-        mainPanel.add(lblStatus, BorderLayout.SOUTH);
+        JPanel buttonGroup = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+        buttonGroup.setBackground(Color.WHITE);
+
+        btnSend = new JButton("Gửi 📤");
+        btnSend.setFont(new Font("SansSerif", Font.BOLD, 13));
+        btnSend.setBackground(ZALO_BLUE);
+        btnSend.setForeground(Color.WHITE);
+        btnSend.setEnabled(false);
+        btnSend.setFocusPainted(false);
+
+        btnReload = new JButton("🔄");
+        btnReload.setToolTipText("Cập nhật lại tin nhắn");
+        btnReload.setEnabled(false);
+
+        buttonGroup.add(btnReload);
+        buttonGroup.add(btnSend);
+
+        southContainer.add(txtMessage, BorderLayout.CENTER);
+        southContainer.add(buttonGroup, BorderLayout.EAST);
+
+        // Thanh trạng thái (Status Bar)
+        lblStatus = new JLabel(" Chưa kết nối đến Server Chat.");
+        lblStatus.setFont(new Font("SansSerif", Font.ITALIC, 11));
+        lblStatus.setForeground(Color.GRAY);
+        southContainer.add(lblStatus, BorderLayout.SOUTH);
+
+        mainPanel.add(headerPanel, BorderLayout.NORTH);
+        mainPanel.add(scrollPane, BorderLayout.CENTER);
+        mainPanel.add(southContainer, BorderLayout.SOUTH);
 
         add(mainPanel);
 
-        // Đăng ký sự kiện nút bấm
+        // Sự kiện
         btnConnect.addActionListener(e -> connectToServer());
-        btnAdd.addActionListener(e -> addData());
-        btnUpdate.addActionListener(e -> reloadData()); // Gọi hàm Reload dữ liệu từ Server
-        btnDelete.addActionListener(e -> deleteData());
+        btnSend.addActionListener(e -> sendMessage());
+        btnReload.addActionListener(e -> reloadChat());
+
+        txtMessage.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    sendMessage();
+                }
+            }
+        });
+
+        // Tự động làm mới tin nhắn mỗi 1.5 giây
+        autoRefreshTimer = new Timer(1500, e -> reloadChat());
     }
 
     private void connectToServer() {
         String ip = txtServerIp.getText().trim();
+        String username = txtUsername.getText().trim();
+
+        if (username.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Vui lòng nhập tên người dùng!", "Cảnh báo", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
         try {
             String url = "rmi://" + ip + ":1099/SyncService";
             currentService = (SyncService) Naming.lookup(url);
-            lblStatus.setText("✅ Đã kết nối thành công tới Server: " + ip);
 
-            btnAdd.setEnabled(true);
-            btnUpdate.setEnabled(true);
-            btnDelete.setEnabled(true);
+            lblStatus.setText(" ✅ Đã kết nối tới Server Chat: " + ip);
 
-            reloadData(); // Tải dữ liệu ngay khi kết nối thành công
+            txtServerIp.setEditable(false);
+            txtUsername.setEditable(false);
+            btnConnect.setEnabled(false);
+
+            txtMessage.setEnabled(true);
+            btnSend.setEnabled(true);
+            btnReload.setEnabled(true);
+
+            reloadChat();
+            autoRefreshTimer.start();
+
         } catch (Exception ex) {
-            lblStatus.setText("❌ Lỗi kết nối Server: " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, "Không thể kết nối Server RMI!\nKiểm tra lại IP hoặc Tường lửa.", "Lỗi Kết Nối", JOptionPane.ERROR_MESSAGE);
+            lblStatus.setText(" ❌ Lỗi kết nối Server: " + ex.getMessage());
+            JOptionPane.showMessageDialog(this, "Không thể kết nối Server RMI Chat!\nKiểm tra IP hoặc Tường lửa.", "Lỗi Kết Nối", JOptionPane.ERROR_MESSAGE);
         }
     }
 
-    // 1. CHỨC NĂNG THÊM: Gửi Key/Value mới lên Server
-    private void addData() {
-        String key = txtKey.getText().trim();
-        String val = txtValue.getText().trim();
-        if (key.isEmpty() || val.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Vui lòng nhập đầy đủ Key và Value để thêm!", "Cảnh báo", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
+    private void sendMessage() {
+        String username = txtUsername.getText().trim();
+        String msg = txtMessage.getText().trim();
+
+        if (msg.isEmpty()) return;
 
         try {
-            currentService.updateData(key, val);
-            txtKey.setText("");
-            txtValue.setText("");
-            reloadData(); // Thêm xong tự động làm mới bảng
-            lblStatus.setText("✅ Đã thêm mới Key: " + key);
+            currentService.sendMessage(username, msg);
+            txtMessage.setText("");
+            reloadChat();
         } catch (Exception ex) {
-            lblStatus.setText("❌ Lỗi khi thêm dữ liệu: " + ex.getMessage());
+            lblStatus.setText(" ❌ Lỗi khi gửi tin nhắn: " + ex.getMessage());
         }
     }
 
-    // 2. CHỨC NĂNG CẬP NHẬT (RELOAD): Chỉ kéo dữ liệu mới nhất từ Server về hiển thị
-    private void reloadData() {
+    // Tải và hiển thị tin nhắn dưới dạng Bong Bóng Chat Zalo
+    private void reloadChat() {
         if (currentService == null) return;
         try {
-            Map<String, String> data = currentService.getAllData();
-            tableModel.setRowCount(0); // Xóa bảng cũ
+            List<String> chatHistory = currentService.getChatHistory();
+            String myUser = txtUsername.getText().trim();
 
-            // Đổ lại toàn bộ dữ liệu mới từ Server (bao gồm dữ liệu từ máy Client khác)
-            for (Map.Entry<String, String> entry : data.entrySet()) {
-                tableModel.addRow(new Object[]{entry.getKey(), entry.getValue()});
+            chatContainerPanel.removeAll(); // Xóa UI cũ để vẽ lại
+
+            // Định dạng chuỗi tin nhắn: "[HH:mm:ss] Username: Content"
+            Pattern pattern = Pattern.compile("^\\[(.*?)\\] (.*?): (.*)$");
+
+            for (String rawLine : chatHistory) {
+                Matcher matcher = pattern.matcher(rawLine);
+                if (matcher.find()) {
+                    String time = matcher.group(1);
+                    String sender = matcher.group(2);
+                    String content = matcher.group(3);
+
+                    boolean isMe = sender.equalsIgnoreCase(myUser);
+                    chatContainerPanel.add(createZaloBubble(sender, content, time, isMe));
+                } else {
+                    // Dòng không đúng chuẩn định dạng
+                    chatContainerPanel.add(createSystemNotice(rawLine));
+                }
             }
 
-            String currentTime = java.time.LocalTime.now().toString();
-            if (currentTime.contains(".")) {
-                currentTime = currentTime.substring(0, currentTime.indexOf("."));
-            }
-            lblStatus.setText("🔄 Đã cập nhật lại dữ liệu từ Server lúc: " + currentTime);
+            chatContainerPanel.revalidate();
+            chatContainerPanel.repaint();
+
+            // Tự động cuộn xuống đáy
+            SwingUtilities.invokeLater(() -> {
+                JScrollBar vertical = scrollPane.getVerticalScrollBar();
+                vertical.setValue(vertical.getMaximum());
+            });
+
+            lblStatus.setText(" 💬 Trực tuyến | Đội hình Chat Zalo sẵn sàng");
 
         } catch (Exception ex) {
-            lblStatus.setText("❌ Lỗi tải dữ liệu: " + ex.getMessage());
+            lblStatus.setText(" ❌ Lỗi tải tin nhắn: " + ex.getMessage());
         }
     }
 
-    // 3. CHỨC NĂNG XÓA: Xóa bản ghi đã chọn
-    private void deleteData() {
-        String key = txtKey.getText().trim();
+    // ==========================================
+    // CẤU TRÚC BONG BÓNG CHAT KIỂU ZALO (LEFT / RIGHT)
+    // ==========================================
+    private JPanel createZaloBubble(String sender, String content, String time, boolean isMe) {
+        // Wrapper Panel định vị Bên Trái (Peer) hoặc Bên Phải (Me)
+        JPanel wrapper = new JPanel(new FlowLayout(isMe ? FlowLayout.RIGHT : FlowLayout.LEFT, 12, 4));
+        wrapper.setOpaque(false);
 
-        if (key.isEmpty() && table.getSelectedRow() != -1) {
-            key = tableModel.getValueAt(table.getSelectedRow(), 0).toString();
+        // Bong bóng chứa nội dung
+        JPanel bubble = new JPanel();
+        bubble.setLayout(new BoxLayout(bubble, BoxLayout.Y_AXIS));
+        bubble.setBackground(isMe ? MY_BUBBLE_BG : PEER_BUBBLE_BG);
+        bubble.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(isMe ? MY_BUBBLE_BG : new Color(220, 224, 230), 1, true),
+                BorderFactory.createEmptyBorder(6, 10, 6, 10)
+        ));
+
+        // 1. Tên người gửi (Chỉ hiển thị nếu là người khác gửi)
+        if (!isMe) {
+            JLabel lblSender = new JLabel(sender);
+            lblSender.setFont(new Font("SansSerif", Font.BOLD, 11));
+            lblSender.setForeground(new Color(0, 100, 200));
+            bubble.add(lblSender);
+            bubble.add(Box.createVerticalStrut(2));
         }
 
-        if (key.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Vui lòng chọn 1 dòng trên bảng hoặc nhập Key cần xóa!", "Cảnh báo", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
+        // 2. Nội dung tin nhắn
+        JLabel lblContent = new JLabel("<html><body style='width: 220px; word-wrap: break-word;'>" + escapeHtml(content) + "</body></html>");
+        lblContent.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        lblContent.setForeground(isMe ? Color.WHITE : Color.BLACK);
+        bubble.add(lblContent);
 
-        int confirm = JOptionPane.showConfirmDialog(
-                this,
-                "Bạn có chắc chắn muốn xóa Key '" + key + "'?",
-                "Xác nhận xóa",
-                JOptionPane.YES_NO_OPTION
-        );
+        // 3. Giờ gửi tin nhắn nằm ở dưới khung bóng
+        JLabel lblTime = new JLabel(time);
+        lblTime.setFont(new Font("SansSerif", Font.PLAIN, 9));
+        lblTime.setForeground(isMe ? new Color(220, 235, 255) : Color.GRAY);
+        lblTime.setAlignmentX(Component.RIGHT_ALIGNMENT);
+        bubble.add(Box.createVerticalStrut(2));
+        bubble.add(lblTime);
 
-        if (confirm == JOptionPane.YES_OPTION) {
-            try {
-                currentService.deleteData(key);
-                txtKey.setText("");
-                txtValue.setText("");
-                reloadData(); // Xóa xong tự động cập nhật lại bảng
-                lblStatus.setText("🗑️ Đã xóa thành công Key: " + key);
-            } catch (Exception ex) {
-                lblStatus.setText("❌ Lỗi khi xóa dữ liệu: " + ex.getMessage());
-            }
-        }
+        wrapper.add(bubble);
+        return wrapper;
+    }
+
+    private JPanel createSystemNotice(String msg) {
+        JPanel wrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        wrapper.setOpaque(false);
+        JLabel lbl = new JLabel(msg);
+        lbl.setFont(new Font("SansSerif", Font.ITALIC, 10));
+        lbl.setForeground(Color.GRAY);
+        wrapper.add(lbl);
+        return wrapper;
+    }
+
+    private String escapeHtml(String text) {
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     public static void main(String[] args) {
