@@ -7,7 +7,12 @@ import java.util.Map;
 
 public class SyncServiceImpl extends UnicastRemoteObject implements SyncService {
     private final String peerIp;
-    private static final String DB_URL = "jdbc:sqlite:server_database.db";
+
+    // --- CẤU HÌNH KẾT NỐI MYSQL ---
+    // Tự động tạo DB 'rmi_db' nếu chưa có
+    private static final String DB_URL = "jdbc:mysql://localhost:3306/rmi_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true";
+    private static final String DB_USER = "root";
+    private static final String DB_PASS = "1905";
 
     public SyncServiceImpl(String peerIp) throws RemoteException {
         super();
@@ -15,23 +20,29 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
         initDatabase();
     }
 
-    // Khởi tạo 2 bảng CSDL: 'users' (Tài khoản) và 'kv_store' (Bảng dữ liệu)
+    private Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(DB_URL, DB_USER, DB_PASS);
+    }
+
+    // Khởi tạo 2 bảng CSDL MySQL (dùng VARCHAR làm Primary Key)
     private void initDatabase() {
         String sqlUsers = "CREATE TABLE IF NOT EXISTS users (" +
-                "  username TEXT PRIMARY KEY," +
-                "  password TEXT NOT NULL" +
-                ");";
+                "  username VARCHAR(255) PRIMARY KEY," +
+                "  password VARCHAR(255) NOT NULL" +
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+
         String sqlStore = "CREATE TABLE IF NOT EXISTS kv_store (" +
-                "  key_name TEXT PRIMARY KEY," +
+                "  key_name VARCHAR(255) PRIMARY KEY," +
                 "  val_data TEXT NOT NULL" +
-                ");";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+
+        try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.execute(sqlUsers);
             stmt.execute(sqlStore);
-            System.out.println("[DATABASE] Đã kết nối & sẵn sàng 2 bảng CSDL (users, kv_store)!");
+            System.out.println("[MYSQL] Đã kết nối & khởi tạo 2 bảng CSDL (users, kv_store) thành công!");
         } catch (SQLException e) {
-            System.err.println("[DATABASE ERROR] Lỗi khởi tạo CSDL: " + e.getMessage());
+            System.err.println("[MYSQL ERROR] Lỗi khởi tạo CSDL: " + e.getMessage());
         }
     }
 
@@ -41,27 +52,27 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
     @Override
     public synchronized boolean registerUser(String username, String password) throws RemoteException {
         String sql = "INSERT INTO users(username, password) VALUES(?, ?)";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+        try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, username);
             pstmt.setString(2, password);
             pstmt.executeUpdate();
-            System.out.println("[DB LOCAL] Đã tạo tài khoản mới: " + username);
+            System.out.println("[MYSQL LOCAL] Đã tạo tài khoản mới: " + username);
 
-            // Đồng bộ tài khoản sang Server Peer
             syncToPeer(peer -> peer.syncUserFromPeer(username, password), "Đăng ký tài khoản");
             return true;
         } catch (SQLException e) {
-            System.err.println("[DB REGISTER WARN] Tên tài khoản đã tồn tại hoặc lỗi: " + e.getMessage());
+            System.err.println("[MYSQL REGISTER WARN] Tên tài khoản đã tồn tại hoặc lỗi: " + e.getMessage());
             return false;
         }
     }
 
     @Override
     public synchronized void syncUserFromPeer(String username, String password) throws RemoteException {
+        // Cú pháp Upsert của MySQL (ON DUPLICATE KEY UPDATE)
         String sql = "INSERT INTO users(username, password) VALUES(?, ?) " +
-                "ON CONFLICT(username) DO UPDATE SET password = excluded.password;";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+                "ON DUPLICATE KEY UPDATE password = VALUES(password);";
+        try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, username);
             pstmt.setString(2, password);
@@ -75,7 +86,7 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
     @Override
     public synchronized boolean login(String username, String password) throws RemoteException {
         String sql = "SELECT password FROM users WHERE username = ?";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+        try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, username);
             ResultSet rs = pstmt.executeQuery();
@@ -94,9 +105,8 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
     @Override
     public synchronized void saveData(String key, String value) throws RemoteException {
         executeUpsertSql(key, value);
-        System.out.println("[DB LOCAL] Đã lưu dữ liệu: " + key + " = " + value);
+        System.out.println("[MYSQL LOCAL] Đã lưu dữ liệu: " + key + " = " + value);
 
-        // Đồng bộ dữ liệu sang Server Peer
         syncToPeer(peer -> peer.syncSaveFromPeer(key, value), "Thêm/Sửa dữ liệu");
     }
 
@@ -109,9 +119,8 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
     @Override
     public synchronized void deleteData(String key) throws RemoteException {
         executeDeleteSql(key);
-        System.out.println("[DB LOCAL] Đã xóa Key: " + key);
+        System.out.println("[MYSQL LOCAL] Đã xóa Key: " + key);
 
-        // Đồng bộ xóa sang Server Peer
         syncToPeer(peer -> peer.syncDeleteFromPeer(key), "Xóa dữ liệu");
     }
 
@@ -125,42 +134,42 @@ public class SyncServiceImpl extends UnicastRemoteObject implements SyncService 
     public synchronized Map<String, String> getAllData() throws RemoteException {
         Map<String, String> data = new LinkedHashMap<>();
         String sql = "SELECT key_name, val_data FROM kv_store";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+        try (Connection conn = getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
                 data.put(rs.getString("key_name"), rs.getString("val_data"));
             }
         } catch (SQLException e) {
-            System.err.println("[DB ERROR] Không thể đọc CSDL: " + e.getMessage());
+            System.err.println("[MYSQL ERROR] Không thể đọc CSDL: " + e.getMessage());
         }
         return data;
     }
 
     // =============================================================
-    // CÁC HÀM PHỤ TRỢ SQL & ĐỒNG BỘ PEER
+    // CÁC HÀM PHỤ TRỢ SQL MYSQL & ĐỒNG BỘ PEER
     // =============================================================
     private void executeUpsertSql(String key, String value) {
         String sql = "INSERT INTO kv_store(key_name, val_data) VALUES(?, ?) " +
-                "ON CONFLICT(key_name) DO UPDATE SET val_data = excluded.val_data;";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+                "ON DUPLICATE KEY UPDATE val_data = VALUES(val_data);";
+        try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, key);
             pstmt.setString(2, value);
             pstmt.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[DB ERROR] SQL Upsert lỗi: " + e.getMessage());
+            System.err.println("[MYSQL ERROR] SQL Upsert lỗi: " + e.getMessage());
         }
     }
 
     private void executeDeleteSql(String key) {
         String sql = "DELETE FROM kv_store WHERE key_name = ?;";
-        try (Connection conn = DriverManager.getConnection(DB_URL);
+        try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, key);
             pstmt.executeUpdate();
         } catch (SQLException e) {
-            System.err.println("[DB ERROR] SQL Delete lỗi: " + e.getMessage());
+            System.err.println("[MYSQL ERROR] SQL Delete lỗi: " + e.getMessage());
         }
     }
 
