@@ -1,17 +1,17 @@
-
 import java.rmi.Remote;
 import java.rmi.RemoteException;
 import java.util.Map;
 
 public interface SyncService extends Remote {
-    // Client gọi hàm này để thêm/sửa dữ liệu
-    void updateData(String key, String value) throws RemoteException;
+    // 1. Quản lý Tài khoản (Đăng nhập / Đăng ký)
+    boolean registerUser(String username, String password) throws RemoteException;
+    boolean login(String username, String password) throws RemoteException;
+    void syncUserFromPeer(String username, String password) throws RemoteException;
 
-    // Server Peer gọi hàm này để đồng bộ (tránh vòng lặp gọi lại)
-    void syncFromPeer(String key, String value) throws RemoteException;
-
-    // Lấy toàn bộ dữ liệu hiện có
-    Map<String, String> getAllData() throws RemoteException;
+    // 2. Quản lý & Đồng bộ Bảng Dữ Liệu
+    void saveData(String key, String value) throws RemoteException;
     void deleteData(String key) throws RemoteException;
+    void syncSaveFromPeer(String key, String value) throws RemoteException;
     void syncDeleteFromPeer(String key) throws RemoteException;
+    Map<String, String> getAllData() throws RemoteException;
 }
