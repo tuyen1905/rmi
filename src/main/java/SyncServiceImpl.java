@@ -8,9 +8,7 @@ import java.util.Map;
 public class SyncServiceImpl extends UnicastRemoteObject implements SyncService {
     private final String peerIp;
 
-    // --- CẤU HÌNH KẾT NỐI MYSQL ---
-    // Tự động tạo DB 'rmi_db' nếu chưa có
-    private static final String DB_URL = "jdbc:mysql://localhost:3306/rmi_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true";
+    private static final String DB_URL = "jdbc:mysql://localhost:3306/chat_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&createDatabaseIfNotExist=true";
     private static final String DB_USER = "root";
     private static final String DB_PASS = "1905";
 
